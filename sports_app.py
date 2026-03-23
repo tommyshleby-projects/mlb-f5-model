@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from pybaseball import pitching_stats
 
-# 1. Team Name Dictionary
+# Team Name Dictionary for full spelling
 TEAM_MAP = {
     'AZ': 'Arizona Diamondbacks', 'ATL': 'Atlanta Braves', 'BAL': 'Baltimore Orioles',
     'BOS': 'Boston Red Sox', 'CHC': 'Chicago Cubs', 'CWS': 'Chicago White Sox',
@@ -21,28 +21,27 @@ st.title("⚾ 2025-2026 First 5 (F5) Analysis")
 
 @st.cache_data
 def load_data():
-    # Attempt to get 2026 data; fall back to 2025 if empty
-    data = pitching_stats(2026)
-    if data.empty:
+    try:
+        # Try 2026 first (current season)
+        data = pitching_stats(2026)
+        if data is None or data.empty:
+            raise ValueError("No 2026 data yet")
+    except:
+        # Fallback to 2025 (last full season)
         data = pitching_stats(2025)
     return data
 
 try:
     df = load_data()
-    
-    # Filter for active teams and map full names
     df = df[df['Team'].isin(TEAM_MAP.keys())].copy()
     df['Full Team'] = df['Team'].map(TEAM_MAP)
 
-    # Sidebar
-    selected_full_name = st.sidebar.selectbox("Select Team", options=sorted(TEAM_MAP.values()))
+    selected_team = st.sidebar.selectbox("Select Team", options=sorted(TEAM_MAP.values()))
+    team_df = df[df['Full Team'] == selected_team].copy()
     
-    # Filter by Team
-    team_df = df[df['Full Team'] == selected_full_name].copy()
-    
-    st.header(f"Top 3 Starters: {selected_full_name}")
+    st.header(f"Top 3 Starters: {selected_team}")
 
-    # Top 3 based on ERA/WHIP (F5 Fundamentals)
+    # Rank by F5 fundamentals: Lowest ERA and WHIP
     top_3 = team_df.sort_values(by=['ERA', 'WHIP'], ascending=[True, True]).head(3)
 
     cols = st.columns(3)
@@ -52,9 +51,9 @@ try:
             st.write(f"**WHIP:** {row['WHIP']} | **K/9:** {row['K/9']}")
 
     st.divider()
-    st.subheader("Team Rotation Stats")
+    st.subheader("Full Rotation Stats")
     st.dataframe(team_df[['Name', 'ERA', 'WHIP', 'K/9', 'FIP', 'Season']])
 
 except Exception as e:
-    st.error(f"Waiting for 2026 Stats: {e}")
-    st.write("If the season just started, stats may take 24-48 hours to update.")
+    st.error(f"Data Source Error: {e}")
+    st.info("The MLB season might be in transition. Try again in a few minutes.")
