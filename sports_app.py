@@ -41,7 +41,7 @@ st.title("⚾ MLB First 5 (F5) Starting Pitcher Analysis")
 
 @st.cache_data
 def load_all_stats():
-    # qual=10 ensures we get the full rotation, not just the top ERA leaders
+    # qual=10 ensures we get the full rotation
     df_25 = pitching_stats(2025, qual=10)
     try:
         df_26 = pitching_stats(2026, qual=1)
@@ -52,38 +52,50 @@ def load_all_stats():
     return df_25
 
 @st.cache_data
-def get_inning_hits(name, year=2025):
-    """Pulls pitch-level data to find hits allowed in innings 1-5"""
+def get_detailed_inning_stats(name, year=2025):
+    """Pulls hits, runs, and strikeouts per inning for STARTS only"""
     try:
         names = name.split(' ')
         first, last = names[0], names[-1]
         ids = playerid_lookup(last, first)
         if ids.empty: return None
-        
         mlb_id = ids.iloc[0]['key_mlbam']
         
         # Pull Statcast data
         data = statcast_pitcher(f'{year}-03-01', f'{year}-11-15', mlb_id)
         
-        # --- CRITICAL FILTERS TO MATCH OFFICIAL 9-HIT TOTAL ---
-        
-        # 1. ONLY Regular Season ('R'). 
-        # Excludes Spring Training ('S') and Postseason ('W', 'L', 'D').
+        # 1. ONLY Regular Season ('R')
         data = data[data['game_type'] == 'R']
         
-        # 2. ONLY Batted Ball Events ('X')
-        # Excludes walks and strikeouts.
-        in_play_data = data[data['type'] == 'X']
+        # 2. STARTER ONLY FILTER: Only include games where they pitched in the 1st inning
+        starter_game_ids = data[data['inning'] == 1]['game_pk'].unique()
+        data = data[data['game_pk'].isin(starter_game_ids)]
         
-        # 3. ONLY Official Hit Events
-        # Excludes Errors and Fielder's Choices.
-        official_hits = ['single', 'double', 'triple', 'home_run']
-        hits = in_play_data[in_play_data['events'].isin(official_hits)]
+        # 3. Identify Hits (Official only)
+        hit_events = ['single', 'double', 'triple', 'home_run']
+        hit_data = data[(data['type'] == 'X') & (data['events'].isin(hit_events))]
+        hits_per_inning = hit_data.groupby('inning').size()
         
-        # 4. Group by inning for F5
-        inning_breakdown = hits.groupby('inning').size().reindex(range(1, 6), fill_value=0)
-        return inning_breakdown
-    except Exception as e:
+        # 4. Identify Runs Allowed
+        # We track when the score increases on a specific pitch/play
+        # Using a copy to avoid SettingWithCopy warnings
+        scoring_plays = data[data['post_bat_score'] > data['bat_score']].copy()
+        scoring_plays = scoring_plays.drop_duplicates(subset=['game_pk', 'at_bat_number'])
+        scoring_plays['runs_on_play'] = scoring_plays['post_bat_score'] - scoring_plays['bat_score']
+        runs_per_inning = scoring_plays.groupby('inning')['runs_on_play'].sum()
+        
+        # 5. Identify Strikeouts
+        so_per_inning = data[data['events'] == 'strikeout'].groupby('inning').size()
+        
+        # Combine into DataFrame
+        df_stats = pd.DataFrame({
+            'Hits': hits_per_inning,
+            'Runs': runs_per_inning,
+            'K': so_per_inning
+        }).reindex(range(1, 6), fill_value=0)
+        
+        return df_stats
+    except Exception:
         return None
 
 try:
@@ -92,7 +104,7 @@ try:
     
     selected_team = st.sidebar.selectbox("Select Team", options=sorted(TEAM_MAP.values()))
     
-    # Filter for Starters Only
+    # Filter for Starters with at least 5 starts in 2025 for a solid baseline
     team_df = df[(df['Full Team'] == selected_team) & (df['GS'] > 0)].copy()
 
     df_25 = team_df[team_df['Season'] == 2025]
@@ -113,19 +125,23 @@ try:
                 st.caption(f"WHIP: {row['WHIP']} | K/9: {row['K/9']}")
         
         st.divider()
-        st.subheader("📊 F5 Inning-by-Inning Hits (2025 Baseline)")
-        st.write("Calculates total hits surrendered per inning across the season.")
+        st.subheader("📊 F5 Inning-by-Inning Deep Dive (2025 Baseline)")
+        st.write("Metric breakdown for innings 1-5 (Regular Season Starts Only)")
         
         hit_cols = st.columns(3)
         for i, (_, row) in enumerate(top_3_25.iterrows()):
             with hit_cols[i]:
-                st.write(f"**{row['Name']}**")
-                hits_data = get_inning_hits(row['Name'])
-                if hits_data is not None:
-                    chart_data = pd.DataFrame({'Inning': hits_data.index, 'Hits': hits_data.values})
-                    st.bar_chart(chart_data.set_index('Inning'))
+                st.write(f"#### {row['Name']}")
+                detailed_stats = get_detailed_inning_stats(row['Name'])
+                
+                if detailed_stats is not None:
+                    # Display metrics table
+                    st.table(detailed_stats.T)
+                    
+                    # Display visualization
+                    st.bar_chart(detailed_stats)
                 else:
-                    st.info("Loading Statcast data...")
+                    st.info(f"Gathering Statcast data for {row['Name']}...")
 
     else:
         st.warning("No starting pitcher data found for 2025.")
@@ -138,7 +154,7 @@ try:
         starters_26 = df_26[df_26['GS'] > 0]
         st.dataframe(starters_26[['Name', 'GS', 'ERA', 'WHIP', 'IP', 'Season']])
     else:
-        st.info("2026 Regular Season stats will show starters here after Opening Day.")
+        st.info("2026 Regular Season stats will appear here as games are played (Starting March 25-26).")
 
 except Exception as e:
     st.error(f"Error: {e}")
