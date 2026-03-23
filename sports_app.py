@@ -55,7 +55,6 @@ def load_all_stats():
 def get_inning_hits(name, year=2025):
     """Pulls pitch-level data to find hits allowed in innings 1-5"""
     try:
-        # Split name for lookup
         names = name.split(' ')
         first, last = names[0], names[-1]
         ids = playerid_lookup(last, first)
@@ -63,17 +62,28 @@ def get_inning_hits(name, year=2025):
         
         mlb_id = ids.iloc[0]['key_mlbam']
         
-        # Pull Statcast data (March to November)
-        data = statcast_pitcher(f'{year}-03-01', f'{year}-11-01', mlb_id)
+        # Pull Statcast data
+        data = statcast_pitcher(f'{year}-03-01', f'{year}-11-15', mlb_id)
         
-        # Filter for hit events
-        hit_events = ['single', 'double', 'triple', 'home_run']
-        hits = data[data['events'].isin(hit_events)]
+        # --- CRITICAL FILTERS TO MATCH OFFICIAL 9-HIT TOTAL ---
         
-        # Group by inning and filter for F5
+        # 1. ONLY Regular Season ('R'). 
+        # Excludes Spring Training ('S') and Postseason ('W', 'L', 'D').
+        data = data[data['game_type'] == 'R']
+        
+        # 2. ONLY Batted Ball Events ('X')
+        # Excludes walks and strikeouts.
+        in_play_data = data[data['type'] == 'X']
+        
+        # 3. ONLY Official Hit Events
+        # Excludes Errors and Fielder's Choices.
+        official_hits = ['single', 'double', 'triple', 'home_run']
+        hits = in_play_data[in_play_data['events'].isin(official_hits)]
+        
+        # 4. Group by inning for F5
         inning_breakdown = hits.groupby('inning').size().reindex(range(1, 6), fill_value=0)
         return inning_breakdown
-    except:
+    except Exception as e:
         return None
 
 try:
